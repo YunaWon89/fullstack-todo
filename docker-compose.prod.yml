@@ -1,0 +1,24 @@
+services:
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - .env.production
+
+  mongo:
+    restart: always
+
+  redis:
+    restart: always
+
+  nginx:
+    restart: always
