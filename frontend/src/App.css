@@ -502,3 +502,80 @@ select:focus {
     font-size: 11px;
   }
 }
+
+
+/* Attachments */
+
+.attachments-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.attachments-input label {
+  color: #374151;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.attachments-input input[type="file"] {
+  height: auto;
+  padding: 10px 12px;
+  background: #ffffff;
+}
+
+.attachments-input small {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.selected-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.selected-files span {
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #4f46e5;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.attachments {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f9fafb;
+  font-size: 12px;
+}
+
+.attachments strong {
+  color: #374151;
+}
+
+.attachments ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.attachments li {
+  margin: 3px 0;
+}
+
+.attachments a {
+  color: #4f46e5;
+  text-decoration: none;
+}
+
+.attachments a:hover {
+  text-decoration: underline;
+}
+
+.attachments li span {
+  color: #9ca3af;
+}
+

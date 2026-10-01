@@ -4,4 +4,18 @@ import { defineConfig } from 'vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost',
+        changeOrigin: true,
+      },
+
+      '/uploads': {
+        target: 'http://localhost',
+        changeOrigin: true,
+      },
+    },
+  },
 })

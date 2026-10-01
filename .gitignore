@@ -1,5 +1,7 @@
 node_modules/
+
 dist/
+
 build/
 
 .env
@@ -19,3 +21,22 @@ Thumbs.db
 .idea/
 
 coverage/
+
+# Local SSL certificates and private keys
+
+nginx/ssl/
+
+# Docker secrets
+
+secrets/
+
+# Database backups
+
+*.archive
+*.dump
+*.tar
+
+# Local backup files
+
+*.backup.js
+*.bak

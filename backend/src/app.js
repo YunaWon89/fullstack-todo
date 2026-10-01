@@ -9,22 +9,59 @@ const rateLimit = require("express-rate-limit");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 
 const app = express();
 
 const PORT = Number(process.env.PORT) || 3000;
-const MONGODB_URI =
+
+const MONGO_USERNAME =
+  process.env.MONGO_USERNAME || "";
+
+const MONGO_PASSWORD_FILE =
+  process.env.MONGO_PASSWORD_FILE || "/run/secrets/mongo_password";
+
+let MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://localhost:27017/todoapp";
-const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost";
+
+if (fs.existsSync(MONGO_PASSWORD_FILE) && MONGO_USERNAME) {
+  const mongoPassword = fs
+    .readFileSync(MONGO_PASSWORD_FILE, "utf8")
+    .trim();
+
+  if (mongoPassword) {
+    MONGODB_URI =
+      `mongodb://${encodeURIComponent(MONGO_USERNAME)}:${encodeURIComponent(mongoPassword)}@mongo:27017/todoapp?authSource=admin`;
+  }
+}
+
+const REDIS_URL =
+  process.env.REDIS_URL || "redis://localhost:6379";
+
+const CORS_ORIGIN =
+  process.env.CORS_ORIGIN || "http://localhost";
+
 const UPLOAD_DIR =
   process.env.UPLOAD_DIR || path.join(__dirname, "../uploads");
-const MAX_FILE_SIZE = Number(process.env.MAX_FILE_SIZE) || 5 * 1024 * 1024;
 
-const ENABLE_ANALYTICS = process.env.ENABLE_ANALYTICS !== "false";
-const ENABLE_FILE_UPLOAD = process.env.ENABLE_FILE_UPLOAD !== "false";
+const MAX_FILE_SIZE =
+  Number(process.env.MAX_FILE_SIZE) || 5 * 1024 * 1024;
+
+const ENABLE_ANALYTICS =
+  process.env.ENABLE_ANALYTICS !== "false";
+
+const ENABLE_FILE_UPLOAD =
+  process.env.ENABLE_FILE_UPLOAD !== "false";
+
+const NODE_ENV =
+  process.env.NODE_ENV || "development";
+
+const CONTAINER_ID =
+  process.env.HOSTNAME || os.hostname();
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+
 
 /* =========================
    Middleware
@@ -48,12 +85,18 @@ const apiLimiter = rateLimit({
 app.use("/api/", apiLimiter);
 
 app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "10mb",
+  })
+);
 
 app.use("/uploads", express.static(UPLOAD_DIR));
 
 /* =========================
-   MongoDB
+   MongoDB Schema
 ========================= */
 
 const todoSchema = new mongoose.Schema(
@@ -94,6 +137,11 @@ const todoSchema = new mongoose.Schema(
           mimetype: String,
           size: Number,
           path: String,
+
+          uploadDate: {
+            type: Date,
+            default: Date.now,
+          },
         },
       ],
       default: [],
@@ -161,19 +209,23 @@ const storage = multer.diskStorage({
 
   filename: (req, file, cb) => {
     const extension = path.extname(file.originalname);
+
     const baseName = path
       .basename(file.originalname, extension)
       .replace(/[^a-zA-Z0-9_-]/g, "_");
 
     cb(
       null,
-      `${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${baseName}${extension}`
+      `${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}-${baseName}${extension}`
     );
   },
 });
 
 const upload = multer({
   storage,
+
   limits: {
     fileSize: MAX_FILE_SIZE,
   },
@@ -188,7 +240,7 @@ const upload = multer({
 });
 
 /* =========================
-   Cache helpers
+   Cache Helpers
 ========================= */
 
 async function clearTodoCache() {
@@ -203,25 +255,39 @@ async function clearTodoCache() {
       await redisClient.del(keys);
     }
   } catch (error) {
-    console.error("Redis cache clear error:", error.message);
+    console.error(
+      "Redis cache clear error:",
+      error.message
+    );
   }
 }
 
 /* =========================
-   Health
+   Health Check
 ========================= */
 
 app.get("/health", (req, res) => {
-  const healthy = mongoConnected && redisConnected;
+  const healthy =
+    mongoConnected && redisConnected;
 
   res.status(healthy ? 200 : 503).json({
     status: healthy ? "healthy" : "unhealthy",
-    environment: process.env.NODE_ENV || "development",
+
+    environment: NODE_ENV,
+
     uptime: process.uptime(),
-    mongo: mongoConnected ? "connected" : "disconnected",
-    redis: redisConnected ? "connected" : "disconnected",
+
+    mongo: mongoConnected
+      ? "connected"
+      : "disconnected",
+
+    redis: redisConnected
+      ? "connected"
+      : "disconnected",
+
     memory: process.memoryUsage(),
-    hostname: require("os").hostname(),
+
+    containerId: CONTAINER_ID,
   });
 });
 
@@ -248,8 +314,15 @@ app.get("/api/todos", async (req, res, next) => {
       limit = 50,
     } = req.query;
 
-    const currentPage = Math.max(Number(page) || 1, 1);
-    const currentLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const currentPage = Math.max(
+      Number(page) || 1,
+      1
+    );
+
+    const currentLimit = Math.min(
+      Math.max(Number(limit) || 50, 1),
+      100
+    );
 
     const filter = {};
 
@@ -261,7 +334,10 @@ app.get("/api/todos", async (req, res, next) => {
       filter.completed = false;
     }
 
-    if (priority && ["low", "medium", "high"].includes(priority)) {
+    if (
+      priority &&
+      ["low", "medium", "high"].includes(priority)
+    ) {
       filter.priority = priority;
     }
 
@@ -273,42 +349,58 @@ app.get("/api/todos", async (req, res, next) => {
 
     if (redisConnected) {
       try {
-        const cached = await redisClient.get(cacheKey);
+        const cached =
+          await redisClient.get(cacheKey);
 
         if (cached) {
           return res.json(JSON.parse(cached));
         }
       } catch (error) {
-        console.error("Redis read error:", error.message);
+        console.error(
+          "Redis read error:",
+          error.message
+        );
       }
     }
 
-    const skip = (currentPage - 1) * currentLimit;
+    const skip =
+      (currentPage - 1) * currentLimit;
 
-    const [todos, total] = await Promise.all([
-      Todo.find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(currentLimit),
+    const [todos, total] =
+      await Promise.all([
+        Todo.find(filter)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(currentLimit),
 
-      Todo.countDocuments(filter),
-    ]);
+        Todo.countDocuments(filter),
+      ]);
 
     const result = {
       data: todos,
+
       pagination: {
         page: currentPage,
         limit: currentLimit,
         total,
-        pages: Math.ceil(total / currentLimit),
+        pages: Math.ceil(
+          total / currentLimit
+        ),
       },
     };
 
     if (redisConnected) {
       try {
-        await redisClient.setEx(cacheKey, 60, JSON.stringify(result));
+        await redisClient.setEx(
+          cacheKey,
+          300,
+          JSON.stringify(result)
+        );
       } catch (error) {
-        console.error("Redis write error:", error.message);
+        console.error(
+          "Redis write error:",
+          error.message
+        );
       }
     }
 
@@ -324,10 +416,20 @@ app.get("/api/todos", async (req, res, next) => {
 
 app.post(
   "/api/todos",
-  ENABLE_FILE_UPLOAD ? upload.array("attachments", 5) : (req, res, next) => next(),
+
+  ENABLE_FILE_UPLOAD
+    ? upload.array("attachments", 5)
+    : (req, res, next) => next(),
+
   async (req, res, next) => {
     try {
-      const { title, description, completed, priority, dueDate } = req.body;
+      const {
+        title,
+        description,
+        completed,
+        priority,
+        dueDate,
+      } = req.body;
 
       if (!title || !title.trim()) {
         return res.status(400).json({
@@ -335,24 +437,35 @@ app.post(
         });
       }
 
-      const attachments = (req.files || []).map((file) => ({
-        filename: file.filename,
-        originalName: file.originalname,
-        mimetype: file.mimetype,
-        size: file.size,
-        path: `/uploads/${file.filename}`,
-      }));
+      const attachments =
+        (req.files || []).map((file) => ({
+          filename: file.filename,
+          originalName: file.originalname,
+          mimetype: file.mimetype,
+          size: file.size,
+          path: `/uploads/${file.filename}`,
+          uploadDate: new Date(),
+        }));
 
       const todo = await Todo.create({
         title: title.trim(),
-        description: description || "",
+
+        description:
+          description || "",
+
         completed:
           completed === true ||
           completed === "true",
-        priority: ["low", "medium", "high"].includes(priority)
-          ? priority
-          : "medium",
+
+        priority:
+          ["low", "medium", "high"].includes(
+            priority
+          )
+            ? priority
+            : "medium",
+
         dueDate: dueDate || null,
+
         attachments,
       });
 
@@ -369,171 +482,226 @@ app.post(
    PUT /api/todos/:id
 ========================= */
 
-app.put("/api/todos/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
+app.put(
+  "/api/todos/:id",
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid todo ID",
-      });
-    }
-
-    const allowedFields = [
-      "title",
-      "description",
-      "completed",
-      "priority",
-      "dueDate",
-    ];
-
-    const updates = {};
-
-    for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        updates[field] = req.body[field];
+      if (
+        !mongoose.Types.ObjectId.isValid(id)
+      ) {
+        return res.status(400).json({
+          message: "Invalid todo ID",
+        });
       }
+
+      const allowedFields = [
+        "title",
+        "description",
+        "completed",
+        "priority",
+        "dueDate",
+      ];
+
+      const updates = {};
+
+      for (const field of allowedFields) {
+        if (
+          req.body[field] !== undefined
+        ) {
+          updates[field] =
+            req.body[field];
+        }
+      }
+
+      if (
+        updates.priority !== undefined &&
+        !["low", "medium", "high"].includes(
+          updates.priority
+        )
+      ) {
+        return res.status(400).json({
+          message: "Invalid priority",
+        });
+      }
+
+      const todo =
+        await Todo.findByIdAndUpdate(
+          id,
+          updates,
+          {
+            new: true,
+            runValidators: true,
+          }
+        );
+
+      if (!todo) {
+        return res.status(404).json({
+          message: "Todo not found",
+        });
+      }
+
+      await clearTodoCache();
+
+      res.json(todo);
+    } catch (error) {
+      next(error);
     }
-
-    if (
-      updates.priority !== undefined &&
-      !["low", "medium", "high"].includes(updates.priority)
-    ) {
-      return res.status(400).json({
-        message: "Invalid priority",
-      });
-    }
-
-    const todo = await Todo.findByIdAndUpdate(id, updates, {
-      new: true,
-      runValidators: true,
-    });
-
-    if (!todo) {
-      return res.status(404).json({
-        message: "Todo not found",
-      });
-    }
-
-    await clearTodoCache();
-
-    res.json(todo);
-  } catch (error) {
-    next(error);
   }
-});
+);
 
 /* =========================
    DELETE /api/todos/:id
 ========================= */
 
-app.delete("/api/todos/:id", async (req, res, next) => {
-  try {
-    const { id } = req.params;
+app.delete(
+  "/api/todos/:id",
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        message: "Invalid todo ID",
-      });
-    }
-
-    const todo = await Todo.findByIdAndDelete(id);
-
-    if (!todo) {
-      return res.status(404).json({
-        message: "Todo not found",
-      });
-    }
-
-    for (const attachment of todo.attachments || []) {
-      if (!attachment.filename) {
-        continue;
+      if (
+        !mongoose.Types.ObjectId.isValid(id)
+      ) {
+        return res.status(400).json({
+          message: "Invalid todo ID",
+        });
       }
 
-      const filePath = path.join(UPLOAD_DIR, attachment.filename);
+      const todo =
+        await Todo.findByIdAndDelete(id);
 
-      try {
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
+      if (!todo) {
+        return res.status(404).json({
+          message: "Todo not found",
+        });
+      }
+
+      for (
+        const attachment of
+        todo.attachments || []
+      ) {
+        if (!attachment.filename) {
+          continue;
         }
-      } catch (error) {
-        console.error("File delete error:", error.message);
+
+        const filePath = path.join(
+          UPLOAD_DIR,
+          attachment.filename
+        );
+
+        try {
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        } catch (error) {
+          console.error(
+            "File delete error:",
+            error.message
+          );
+        }
       }
+
+      await clearTodoCache();
+
+      res.json({
+        message: "Todo deleted",
+      });
+    } catch (error) {
+      next(error);
     }
-
-    await clearTodoCache();
-
-    res.json({
-      message: "Todo deleted",
-    });
-  } catch (error) {
-    next(error);
   }
-});
+);
 
 /* =========================
    Analytics
 ========================= */
 
-app.get("/api/analytics", async (req, res, next) => {
-  try {
-    if (!ENABLE_ANALYTICS) {
-      return res.status(404).json({
-        message: "Analytics disabled",
+app.get(
+  "/api/analytics",
+  async (req, res, next) => {
+    try {
+      if (!ENABLE_ANALYTICS) {
+        return res.status(404).json({
+          message: "Analytics disabled",
+        });
+      }
+
+      const [
+        total,
+        completed,
+        pending,
+      ] = await Promise.all([
+        Todo.countDocuments(),
+
+        Todo.countDocuments({
+          completed: true,
+        }),
+
+        Todo.countDocuments({
+          completed: false,
+        }),
+      ]);
+
+      const priorities =
+        await Todo.aggregate([
+          {
+            $group: {
+              _id: "$priority",
+              count: {
+                $sum: 1,
+              },
+            },
+          },
+        ]);
+
+      res.json({
+        total,
+        completed,
+        pending,
+        priorities,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/* =========================
+   Error Handlers
+========================= */
+
+app.use(
+  (error, req, res, next) => {
+    if (
+      error instanceof multer.MulterError
+    ) {
+      return res.status(400).json({
+        message: error.message,
       });
     }
 
-    const [total, completed, pending] = await Promise.all([
-      Todo.countDocuments(),
-      Todo.countDocuments({ completed: true }),
-      Todo.countDocuments({ completed: false }),
-    ]);
+    if (
+      error.message ===
+      "Unsupported file type"
+    ) {
+      return res.status(400).json({
+        message: error.message,
+      });
+    }
 
-    const priorities = await Todo.aggregate([
-      {
-        $group: {
-          _id: "$priority",
-          count: {
-            $sum: 1,
-          },
-        },
-      },
-    ]);
+    console.error(error);
 
-    res.json({
-      total,
-      completed,
-      pending,
-      priorities,
+    res.status(500).json({
+      message: "Internal server error",
     });
-  } catch (error) {
-    next(error);
   }
-});
+);
 
 /* =========================
-   Error handlers
+   404 Handler
 ========================= */
-
-app.use((error, req, res, next) => {
-  if (error instanceof multer.MulterError) {
-    return res.status(400).json({
-      message: error.message,
-    });
-  }
-
-  if (error.message === "Unsupported file type") {
-    return res.status(400).json({
-      message: error.message,
-    });
-  }
-
-  console.error(error);
-
-  res.status(500).json({
-    message: "Internal server error",
-  });
-});
 
 app.use((req, res) => {
   res.status(404).json({
@@ -542,7 +710,7 @@ app.use((req, res) => {
 });
 
 /* =========================
-   Database connections
+   Database Connections
 ========================= */
 
 async function connectRedis() {
@@ -552,29 +720,49 @@ async function connectRedis() {
 }
 
 async function connectMongo() {
+  mongoose.connection.on(
+    "connected",
+    () => {
+      mongoConnected = true;
+      console.log("MongoDB connected");
+    }
+  );
+
+  mongoose.connection.on(
+    "disconnected",
+    () => {
+      mongoConnected = false;
+      console.log("MongoDB disconnected");
+    }
+  );
+
+  mongoose.connection.on(
+    "error",
+    (error) => {
+      mongoConnected = false;
+
+      console.error(
+        "MongoDB error:",
+        error.message
+      );
+    }
+  );
+
   await mongoose.connect(MONGODB_URI);
 
   mongoConnected = true;
-
-  mongoose.connection.on("disconnected", () => {
-    mongoConnected = false;
-    console.log("MongoDB disconnected");
-  });
-
-  mongoose.connection.on("connected", () => {
-    mongoConnected = true;
-    console.log("MongoDB connected");
-  });
 
   console.log("MongoDB connected");
 }
 
 /* =========================
-   Graceful shutdown
+   Graceful Shutdown
 ========================= */
 
 async function shutdown(signal) {
-  console.log(`${signal} received. Shutting down...`);
+  console.log(
+    `${signal} received. Shutting down...`
+  );
 
   try {
     await mongoose.connection.close();
@@ -585,28 +773,58 @@ async function shutdown(signal) {
 
     process.exit(0);
   } catch (error) {
-    console.error("Shutdown error:", error);
+    console.error(
+      "Shutdown error:",
+      error
+    );
+
     process.exit(1);
   }
 }
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+process.on(
+  "SIGTERM",
+  () => shutdown("SIGTERM")
+);
+
+process.on(
+  "SIGINT",
+  () => shutdown("SIGINT")
+);
 
 /* =========================
-   Start server
+   Start Server
 ========================= */
 
 async function startServer() {
   try {
+    console.log(
+      `NODE_ENV: ${NODE_ENV}`
+    );
+
+    console.log(
+      `Container ID: ${CONTAINER_ID}`
+    );
+
     await connectRedis();
+
     await connectMongo();
 
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server is running on port ${PORT}`);
-    });
+    app.listen(
+      PORT,
+      "0.0.0.0",
+      () => {
+        console.log(
+          `Server is running on port ${PORT}`
+        );
+      }
+    );
   } catch (error) {
-    console.error("Failed to start server:", error);
+    console.error(
+      "Failed to start server:",
+      error
+    );
+
     process.exit(1);
   }
 }
